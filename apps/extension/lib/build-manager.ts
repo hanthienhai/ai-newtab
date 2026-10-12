@@ -1,7 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { runHomepageBuild, type RunPhase } from "@homepage/agent-core";
 import { rebuildIntervalMs, shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
+import { checkClaudeCode, nativeClaudeRunner } from "./claude-runner";
 import {
   INITIAL_BUILD_STATE,
   LOG_RETENTION,
@@ -15,9 +15,9 @@ import { KEYS, extensionStore, loadHomepage, loadSettings, saveHomepage } from "
 type Port = Parameters<Parameters<typeof browser.runtime.onConnect.addListener>[0]>[0];
 
 /**
- * While a turn is active, ping a cheap chrome API on this interval to reset the
- * ~30s MV3 idle-unload timer. The ~1 min alarm heartbeat is the slower safety
- * net that reattaches after an unexpected kill.
+ * While a build is active, ping a cheap chrome API on this interval to reset the
+ * ~30s MV3 idle-unload timer (an open native port does too, but the scraping
+ * step between the two Claude Code turns has none).
  */
 const KEEPALIVE_INTERVAL_MS = 20_000;
 
@@ -28,9 +28,8 @@ const NARRATION_STORAGE_CAP = 2_000;
 
 /**
  * Owns the single build. Runs `runHomepageBuild` in the worker, holds live state,
- * enforces a single-flight lock, broadcasts progress to every connected tab,
- * mirrors a throttled snapshot to storage, and reattaches to an interrupted run
- * on wake.
+ * enforces a single-flight lock, broadcasts progress to every connected tab, and
+ * mirrors a throttled snapshot to storage.
  *
  * There is one instance per service worker — i.e. one per browser profile — so
  * single-flight is per-profile, which is the right grain.
@@ -58,7 +57,7 @@ export class BuildManager {
         this.send(port, { kind: "snapshot", state: this.state });
         break;
       case "startBuild":
-        void this.startBuild({ resume: msg.resume });
+        void this.startBuild();
         break;
       case "cancel":
         this.cancel();
@@ -82,10 +81,10 @@ export class BuildManager {
   // ---- heartbeat -----------------------------------------------------------
 
   /**
-   * Called on worker wake and on every alarm tick. If a session was left
-   * mid-flight, reattach and continue (lossless — the orchestrator replays the
-   * event log and re-answers orphaned tool calls). Otherwise, consider the daily
-   * rebuild. The single-flight lock is the arbiter that keeps these from racing.
+   * Called on worker wake and on every alarm tick: consider the scheduled
+   * rebuild. A build cut off by a worker kill is not resumed — the native port
+   * closed with it, which stopped its `claude` process — so the next scheduled
+   * or manual build starts fresh.
    */
   async tick() {
     if (this.running) {
@@ -95,10 +94,11 @@ export class BuildManager {
       return;
     }
 
-    const sessionId = await extensionStore.get<string>(KEYS.activeSessionId);
-    if (sessionId) {
-      void this.startBuild({ resume: true });
-      return;
+    // A snapshot still marked running belongs to a build that died with the worker.
+    const snap = await extensionStore.get<BuildState>(KEYS.buildSnapshot);
+    if (snap?.running) {
+      this.state = { ...snap, running: false, phase: "error", error: "The build was interrupted. Rebuild to try again." };
+      await this.mirror(true);
     }
 
     await this.maybeAutoRebuild();
@@ -116,7 +116,6 @@ export class BuildManager {
     if (
       !shouldAutoRebuild({
         enabled: settings.autoRebuild,
-        hasApiKey: Boolean(settings.apiKey),
         isRunning: this.running,
         lastBuildTimestamp: homepage?.timestamp,
         lastAutoAttemptTimestamp: lastAttempt,
@@ -130,51 +129,35 @@ export class BuildManager {
     // Stamp the attempt before starting so a second wake (or a cancel/failure)
     // doesn't re-trigger it within the interval.
     await extensionStore.set(KEYS.lastAutoBuildAttempt, now.toISOString());
-    void this.startBuild({ resume: false });
+    void this.startBuild();
   }
 
   // ---- the build -----------------------------------------------------------
 
-  async startBuild(opts: { resume?: boolean } = {}) {
+  async startBuild() {
     if (this.running) {
       console.log("[BuildManager] startBuild ignored — a build is already running");
       return; // single-flight: a second start just attaches.
     }
 
-    const { apiKey, systemPrompt, model } = await loadSettings();
-    if (!apiKey) {
-      // Manual builds are gated behind the key-setup screen and auto-builds
-      // require a key, so this only happens if the key was removed.
-      console.warn("[BuildManager] startBuild aborted — no API key in storage");
-      const message = "No Anthropic API key found. Add your key and try again.";
-      this.state = { ...INITIAL_BUILD_STATE, phase: "error", error: message };
-      this.broadcast({ kind: "error", message });
-      return;
-    }
+    const { systemPrompt, model } = await loadSettings();
 
     this.running = true;
     this.controller = new AbortController();
     this.state = { ...INITIAL_BUILD_STATE, running: true, phase: "setup" };
     this.broadcast({ kind: "snapshot", state: this.state });
     this.startKeepalive();
-    console.log("[BuildManager] build started", { resume: Boolean(opts.resume) });
+    console.log("[BuildManager] build started");
 
     try {
-      // The key is the user's own, read from local storage — there is no server
-      // to hide it behind. See ARCHITECTURE.md → Privacy.
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-
-      const resumeSessionId = opts.resume
-        ? await extensionStore.get<string>(KEYS.activeSessionId)
-        : undefined;
+      const version = await checkClaudeCode();
+      this.onLog(`claude ${version}, model ${model}`);
 
       const result = await runHomepageBuild({
-        client,
+        runner: nativeClaudeRunner,
         bridge: browserBridge,
-        store: extensionStore,
         userSystemPrompt: systemPrompt,
         model,
-        resumeSessionId,
         signal: this.controller.signal,
         callbacks: {
           onPhase: (phase, detail) => this.onPhase(phase, detail),

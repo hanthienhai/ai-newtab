@@ -1,35 +1,33 @@
 /**
- * End-to-end build against the real API (needs ANTHROPIC_API_KEY in .env).
+ * End-to-end build through the local Claude Code CLI (needs `claude auth login`).
  *
  * Exercises the exact orchestrator the extension runs, with a fixture/fetch
- * bridge standing in for chrome.history and chrome.tabs. Verifies: agent +
- * environment reuse, session lifecycle, custom-tool dispatch, mid-session file
- * mounting, sandbox grep/read, the written deliverable, and cleanup.
+ * bridge standing in for chrome.history and chrome.tabs, and the native host's
+ * own `runClaude` standing in for the native messaging hop. Verifies: page
+ * picking via structured output, pages written to the run directory, Read/Grep
+ * over them, and the written deliverable.
  *
  * Run: pnpm agent:run
  */
-import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild } from "@homepage/agent-core";
+import { runHomepageBuild, type ClaudeRunner, type HomepageModel } from "@homepage/agent-core";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { FileKVStore, OUT_DIR, OUT_PATH, STATE_PATH, nodeBridge } from "./node-bridge";
+// @ts-expect-error plain ESM module without types
+import { runClaude } from "../apps/native-host/claude-run.mjs";
+import { OUT_DIR, OUT_PATH, nodeBridge } from "./node-bridge";
+
+const localRunner: ClaudeRunner = { run: runClaude };
 
 async function main() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set (put it in .env)");
-
-  const client = new Anthropic({ apiKey });
-  const store = new FileKVStore(STATE_PATH);
-
   mkdirSync(OUT_DIR, { recursive: true });
 
   const started = Date.now();
   let lastPhase = "";
 
   const result = await runHomepageBuild({
-    client,
+    runner: localRunner,
     bridge: nodeBridge,
-    store,
     userSystemPrompt: process.env.HOMEPAGE_PROMPT,
+    model: process.env.HOMEPAGE_MODEL as HomepageModel | undefined,
     callbacks: {
       onPhase: (phase, detail) => {
         if (phase !== lastPhase) {
@@ -46,7 +44,6 @@ async function main() {
   writeFileSync(OUT_PATH, result.code);
 
   console.log("\n\n========== RESULT ==========");
-  console.log(`session      : ${result.sessionId}`);
   console.log(`source       : ${result.source}`);
   console.log(`code length  : ${result.code.length} bytes`);
   console.log(`elapsed      : ${elapsed}s`);

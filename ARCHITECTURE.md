@@ -1,5 +1,11 @@
 # Architecture
 
+> **Note:** this file describes the upstream design, built on Claude Managed
+> Agents and an API key. This fork replaces that with two local `claude -p`
+> turns reached through a native messaging helper; see "How it works" in the
+> README and `apps/native-host/`. The parts about the service worker, tabs as
+> views and the scraper still apply.
+
 There is no server. Three parties are involved, and you run one of them.
 
 | | Runs where | Does what |

@@ -2,8 +2,9 @@
  * Contracts shared by every host that can drive the homepage agent.
  *
  * The orchestrator is deliberately ignorant of *where* it runs. The extension
- * supplies a bridge backed by `chrome.history` / `chrome.tabs`; the Node test
- * harness supplies one backed by fixtures and `fetch`. Nothing in this package
+ * supplies a bridge backed by `chrome.history` / `chrome.tabs` and a runner that
+ * reaches Claude Code through native messaging; the Node test harness supplies a
+ * fixture/fetch bridge and spawns Claude Code directly. Nothing in this package
  * may import `chrome`, `browser`, or `node:*`.
  */
 
@@ -26,27 +27,6 @@ export interface GetHistoryResult {
   sites: SiteDigest[];
 }
 
-/** A page whose HTML now lives in the session sandbox rather than in context. */
-export interface PageRef {
-  url: string;
-  title: string;
-  /**
-   * The path the sandbox actually resolved, read back off the `resources.add()`
-   * response. Never the path we asked for — the API re-roots every file resource
-   * under `/mnt/session/uploads/`, so a requested `/workspace/x.html` lands at
-   * `/mnt/session/uploads/workspace/x.html`.
-   */
-  mountPath: string;
-  /** Lets the model choose grep-first over read-whole. */
-  bytes: number;
-}
-
-export interface GetPageHtmlResult {
-  pages: PageRef[];
-  /** Surfaced, never swallowed: partial failure is information the model needs. */
-  failed: Array<{ url: string; reason: string }>;
-}
-
 /** Raw per-domain history, as a BrowserBridge returns it — before `buildHistoryDigest` narrows it. */
 export interface RawSiteMetadata {
   domain: string;
@@ -67,7 +47,7 @@ export interface ScrapedPage {
 
 /**
  * The two capabilities only a real browser has. Everything else the agent needs
- * (a filesystem, grep, read) is supplied by the session sandbox.
+ * (a filesystem, grep, read) comes from Claude Code's own tools in a temp dir.
  */
 export interface BrowserBridge {
   getHistory(args: {
@@ -81,22 +61,55 @@ export interface BrowserBridge {
   }): Promise<{ pages: ScrapedPage[]; failed: Array<{ url: string; reason: string }> }>;
 }
 
-/** Minimal persistence. `chrome.storage.local` in the extension, a JSON file in Node. */
+/** Minimal persistence. `chrome.storage.local` in the extension. */
 export interface KVStore {
   get<T>(key: string): Promise<T | undefined>;
   set(key: string, value: unknown): Promise<void>;
   remove(key: string): Promise<void>;
 }
 
+/** One headless Claude Code turn (`claude -p`), run in a fresh temp directory. */
+export interface ClaudeRunRequest {
+  /** Passed to `--model`. */
+  model: string;
+  /** Replaces Claude Code's default system prompt. */
+  systemPrompt: string;
+  /** The user message, sent over stdin. */
+  prompt: string;
+  /** Built-in Claude Code tools this turn may use, e.g. ["Read", "Grep"]. Empty for none. */
+  tools: string[];
+  /** Ask for structured output matching this JSON Schema; it comes back as `structured`. */
+  jsonSchema?: object;
+  /** Written into the temp directory before the turn starts (relative paths). */
+  files?: Array<{ path: string; content: string }>;
+  /** Temp-directory files to read back after the turn (relative paths). */
+  collect?: string[];
+}
+
+export type ClaudeRunEvent =
+  | { type: "text"; text: string }
+  | { type: "tool"; name: string; input?: unknown };
+
+export interface ClaudeRunResult {
+  /** The final assistant message. */
+  result: string;
+  structured?: unknown;
+  /** Contents of the `collect` files that exist. */
+  files: Record<string, string>;
+}
+
+/** Where Claude Code actually runs: a native messaging host in the extension, a child process in the harness. */
+export interface ClaudeRunner {
+  run(req: ClaudeRunRequest, onEvent: (event: ClaudeRunEvent) => void, signal?: AbortSignal): Promise<ClaudeRunResult>;
+}
+
 export type RunPhase =
   | "setup"
-  | "session-create"
-  | "thinking"
+  | "choosing"
   | "history"
   | "scraping"
   | "analyzing"
   | "writing"
-  | "cleanup"
   | "done"
   | "error";
 
@@ -109,7 +122,6 @@ export interface RunCallbacks {
 
 export interface HomepageBuildResult {
   code: string;
-  sessionId: string;
-  /** Where the code came from: a session output file, or a fenced block in the final message. */
-  source: "session-output" | "message-fence";
+  /** Where the code came from: the written file, or a fenced block in the final message. */
+  source: "output-file" | "message-fence";
 }

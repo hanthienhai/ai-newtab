@@ -151,8 +151,8 @@ try {
   await sleep(2500); // let React mount
   const bodyText = await page.evaluate<string>("document.body.innerText");
   check(
-    "renders the API-key setup screen",
-    /Connect your Anthropic API key/i.test(bodyText),
+    "renders the first-build screen",
+    /Build your homepage/i.test(bodyText),
     bodyText.split("\n").filter(Boolean)[0]?.slice(0, 50),
   );
 
@@ -177,10 +177,16 @@ try {
     JSON.stringify(subscribed[0])?.slice(0, 80),
   );
 
-  // ---- 4. startBuild without a key fails cleanly ----------------------------
-  const started = await talk({ kind: "startBuild" }, 3000);
+  // ---- 4. startBuild on an empty profile fails cleanly ----------------------
+  // Either the native host is missing / logged out, or it is fine and the fresh
+  // profile has no history yet. Both must end in an error message, not a hang.
+  const started = await talk({ kind: "startBuild" }, 8000);
   const error = started.find((m) => m.kind === "error");
-  check("startBuild with no API key reports an error", /API key/i.test(error?.message ?? ""), error?.message);
+  check(
+    "startBuild on an empty profile reports an error",
+    /Claude Code|claude|history/i.test(error?.message ?? ""),
+    error?.message,
+  );
 
   // ---- 5. chrome.history is readable ---------------------------------------
   const domains = await page.evaluate<string[]>(`

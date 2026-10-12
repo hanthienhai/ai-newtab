@@ -117,7 +117,7 @@ export function SettingsModal({
         </label>
         <p style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
           When on, the extension rebuilds in the background once your homepage is this old, so
-          your next tab shows a fresh one (uses your API key).
+          your next tab shows a fresh one. Each build counts against your Claude plan&apos;s usage limits.
         </p>
         <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "flex-end" }}>
           <button

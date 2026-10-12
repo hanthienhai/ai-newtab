@@ -4,14 +4,19 @@ dist/
 .wxt/
 coverage/
 
-# Secrets — your Anthropic key goes here for the harness
+# Local env for the harness
 .env
 .env.*
 !.env.example
 
-# Harness state (agent/environment IDs) and generated homepages
-.agent-state.json
+# Generated homepages
 harness/out/
+
+# Written by apps/native-host/install.mjs (absolute paths on this machine)
+apps/native-host/config.json
+apps/native-host/host.cmd
+apps/native-host/host.sh
+apps/native-host/com.ainewtab.claude.json
 
 # Editors / OS
 .vscode/
@@ -19,3 +24,6 @@ harness/out/
 .claude/settings.local.json
 .DS_Store
 *.log
+
+# Local planning notes
+tasks/

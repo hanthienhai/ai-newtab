@@ -1,19 +1,11 @@
-import {
-  DEFAULT_MODEL,
-  MODEL_CHOICES,
-  STORAGE_KEYS as AGENT_KEYS,
-  type HomepageModel,
-  type KVStore,
-} from "@homepage/agent-core";
+import { DEFAULT_MODEL, MODEL_CHOICES, type HomepageModel, type KVStore } from "@homepage/agent-core";
 
 /**
  * Everything the extension persists, in one place. All of it lives in
- * chrome.storage.local — including the API key, which anyone with access to the
- * browser profile can read. Fine for a tool you run yourself; not for one you
- * distribute (see ARCHITECTURE.md → Privacy).
+ * chrome.storage.local. There is no credential here: Claude Code holds its own
+ * login, outside the browser.
  */
 export const KEYS = {
-  ...AGENT_KEYS,
   homepage: "homepageData",
   systemPrompt: "systemPrompt",
   model: "model",
@@ -33,7 +25,6 @@ export interface Homepage {
 }
 
 export interface Settings {
-  apiKey: string | null;
   systemPrompt: string;
   model: HomepageModel;
   /** Unset means on — auto-rebuild is opt-out. */
@@ -41,7 +32,7 @@ export interface Settings {
   rebuildIntervalHours: number | null;
 }
 
-/** The `KVStore` agent-core persists its agent/environment/session IDs through. */
+/** Thin typed wrapper over chrome.storage.local. */
 export const extensionStore: KVStore = {
   async get<T>(key: string): Promise<T | undefined> {
     const result = await browser.storage.local.get(key);
@@ -57,7 +48,6 @@ export const extensionStore: KVStore = {
 
 export async function loadSettings(): Promise<Settings> {
   const s = await browser.storage.local.get([
-    KEYS.apiKey,
     KEYS.systemPrompt,
     KEYS.model,
     KEYS.autoRebuild,
@@ -65,7 +55,6 @@ export async function loadSettings(): Promise<Settings> {
   ]);
   const model = s[KEYS.model] as string | undefined;
   return {
-    apiKey: (s[KEYS.apiKey] as string | undefined) ?? null,
     systemPrompt: (s[KEYS.systemPrompt] as string | undefined) ?? "",
     // Fall back if a stored model is no longer offered.
     model: MODEL_CHOICES.find((m) => m.id === model)?.id ?? DEFAULT_MODEL,
@@ -74,7 +63,7 @@ export async function loadSettings(): Promise<Settings> {
   };
 }
 
-export async function saveSetting<K extends "apiKey" | "systemPrompt" | "model" | "autoRebuild" | "rebuildIntervalHours">(
+export async function saveSetting<K extends "systemPrompt" | "model" | "autoRebuild" | "rebuildIntervalHours">(
   key: K,
   value: Settings[K],
 ): Promise<void> {

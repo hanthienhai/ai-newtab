@@ -7,8 +7,8 @@ cho bạn. Một agent xem bạn hay vào trang nào, mở các trang đó ngay 
 duyệt của bạn (đã đăng nhập sẵn), rồi viết lại thành một trang chủ mới. Trang tự
 dựng lại ở chế độ nền, nên mỗi lần mở tab mới bạn thấy tin gần nhất.
 
-![Một trang chủ mẫu kiểu báo buổi sáng](docs/preview.png)
-<sub>Ảnh minh hoạ. Trang của bạn dựng từ lịch sử duyệt web của bạn nên nội dung sẽ khác.</sub>
+![Trang chủ thật do bản này dựng, viết tiếng Việt](docs/screenshot.png)
+<sub>Ảnh chụp thật ngày 12/10/2026, dựng từ lịch sử duyệt web của tôi (chủ yếu tin game). Trang của bạn dựng từ lịch sử của bạn nên nội dung và bố cục sẽ khác.</sub>
 
 ## Fork từ đâu
 

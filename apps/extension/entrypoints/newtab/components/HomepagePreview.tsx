@@ -7,8 +7,10 @@ import App from "./App";
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);`;
 
+// Links must leave the iframe: most sites (google.com, ...) refuse to be framed
+// and the sandbox can't navigate the new tab page itself, only open popups.
 const INDEX_HTML = `<!DOCTYPE html>
-<html><head><title>My Personalized Homepage</title></head>
+<html><head><title>My Personalized Homepage</title><base target="_blank"></head>
 <body><div id="root"></div></body></html>`;
 
 /**

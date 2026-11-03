@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { BrowserBridge, RawSiteMetadata } from "@homepage/agent-core";
 
 /** Harness output, next to these scripts. */
-export const OUT_DIR = join(import.meta.dir, "out");
+export const OUT_DIR = join(import.meta.dir ?? import.meta.dirname, "out");
 export const OUT_PATH = join(OUT_DIR, "homepage.tsx");
 
 const DAY = 24 * 60 * 60 * 1000;

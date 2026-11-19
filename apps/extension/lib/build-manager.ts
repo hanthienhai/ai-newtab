@@ -49,6 +49,8 @@ export class BuildManager {
    * all read the same stale timestamps and each start a build.
    */
   private ticking: Promise<void> | null = null;
+  /** The running build, so a restart can wait for it to wind down. */
+  private current: Promise<void> | null = null;
 
   // ---- port lifecycle ------------------------------------------------------
 
@@ -64,7 +66,7 @@ export class BuildManager {
         this.send(port, { kind: "snapshot", state: this.state });
         break;
       case "startBuild":
-        void this.startBuild();
+        void (msg.restart ? this.restartBuild() : this.startBuild());
         break;
       case "cancel":
         this.cancel();
@@ -150,32 +152,47 @@ export class BuildManager {
 
   // ---- the build -----------------------------------------------------------
 
-  async startBuild() {
+  startBuild(): Promise<void> {
     if (this.running) {
       console.log("[BuildManager] startBuild ignored — a build is already running");
-      return; // single-flight: a second start just attaches.
+      return this.current ?? Promise.resolve(); // single-flight: a second start just attaches.
     }
 
-    // Take the lock before the first await, or two starts in the same moment
-    // both pass the check above.
+    // Take the lock and the abort handle before the first await, so two starts
+    // in the same moment can't both pass the check above, and a cancel that
+    // lands while settings load still reaches this build.
     this.running = true;
-    let settings: Awaited<ReturnType<typeof loadSettings>>;
-    try {
-      settings = await loadSettings();
-    } catch (error) {
-      this.running = false;
-      throw error;
-    }
-    const { systemPrompt, model } = settings;
-
     this.controller = new AbortController();
+    this.current = this.runBuild(this.controller.signal).finally(() => {
+      this.current = null;
+    });
+    return this.current;
+  }
+
+  /**
+   * Cancel the running build, if any, and start a fresh one once it has wound
+   * down. Saving a new prompt mid-build uses this: a plain start would be
+   * ignored and the prompt would only apply to the build after next.
+   */
+  async restartBuild() {
+    if (this.running) {
+      this.cancel();
+      await this.current;
+    }
+    await this.startBuild();
+  }
+
+  private async runBuild(signal: AbortSignal) {
     this.state = { ...INITIAL_BUILD_STATE, running: true, phase: "setup" };
     this.broadcast({ kind: "snapshot", state: this.state });
     this.startKeepalive();
     console.log("[BuildManager] build started");
 
     try {
-      const version = await checkClaudeCode();
+      // Read settings inside the run, so a build started right after a save
+      // uses the new prompt and model.
+      const { systemPrompt, model } = await loadSettings();
+      const version = await checkClaudeCode(signal);
       this.onLog(`claude ${version}, model ${model}`);
 
       const result = await runHomepageBuild({
@@ -183,7 +200,7 @@ export class BuildManager {
         bridge: browserBridge,
         userSystemPrompt: systemPrompt,
         model,
-        signal: this.controller.signal,
+        signal,
         callbacks: {
           onPhase: (phase, detail) => this.onPhase(phase, detail),
           onText: (chunk) => this.onText(chunk),
@@ -199,7 +216,7 @@ export class BuildManager {
       await this.mirror(true);
       console.log("[BuildManager] build done", { bytes: result.code.length, source: result.source });
     } catch (error) {
-      if (this.controller?.signal.aborted) {
+      if (signal.aborted) {
         // The user cancelled: go back to idle, not to a "Build failed" banner.
         this.state = { ...INITIAL_BUILD_STATE };
         this.broadcast({ kind: "snapshot", state: this.state });

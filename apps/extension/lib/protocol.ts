@@ -37,7 +37,8 @@ export const LOG_RETENTION = 40;
 // page → worker
 export type PageMsg =
   | { kind: "subscribe" } //                    → replies with a snapshot
-  | { kind: "startBuild" } //                   no-op if one is already running
+  | { kind: "startBuild"; restart?: boolean } // no-op if one is already running, unless
+  //                                             restart: then cancel it and start over
   | { kind: "cancel" };
 
 // worker → page (broadcast to every connected tab)

@@ -86,8 +86,9 @@ export function useHomepageBuild(onDone: (code: string) => void) {
     };
   }, []);
 
-  const build = useCallback(() => {
-    portRef.current?.postMessage({ kind: "startBuild" } satisfies PageMsg);
+  /** `restart` cancels a build already running and starts over (new settings). */
+  const build = useCallback((opts?: { restart?: boolean }) => {
+    portRef.current?.postMessage({ kind: "startBuild", restart: opts?.restart } satisfies PageMsg);
     // Optimistic: flip to the build screen now; the worker's snapshot and
     // deltas take over from here.
     setState({ ...INITIAL_BUILD_STATE, running: true, phase: "setup" });

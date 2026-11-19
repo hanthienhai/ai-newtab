@@ -54,7 +54,8 @@ export default function App() {
       setSystemPrompt(prompt);
       setShowSettings(false);
       setRenderedCode(null);
-      build();
+      // A build already running would ignore the new prompt; start over with it.
+      build({ restart: true });
     },
     [build],
   );

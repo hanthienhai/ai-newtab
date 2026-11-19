@@ -61,8 +61,8 @@ function call<T>(
 }
 
 /** Check the helper is installed and `claude` is logged in, with an actionable message if not. */
-export async function checkClaudeCode(): Promise<string> {
-  const pong = await call<{ version: string | null; loggedIn: boolean }>({ type: "ping" }, () => {});
+export async function checkClaudeCode(signal?: AbortSignal): Promise<string> {
+  const pong = await call<{ version: string | null; loggedIn: boolean }>({ type: "ping" }, () => {}, signal);
   if (!pong.version) throw new Error("The helper can't find the `claude` CLI. Install Claude Code, then rerun the installer.");
   if (!pong.loggedIn) throw new Error("Claude Code isn't logged in. Run `claude auth login` in a terminal, then retry.");
   return pong.version;

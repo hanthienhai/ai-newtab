@@ -134,9 +134,9 @@ async function scrapeUrl(
   windowId: number,
   opts: Required<ScrapeOptions>,
   signal?: AbortSignal,
-): Promise<ScrapedPage | null> {
+): Promise<ScrapedPage | string> {
   try {
-    if (signal?.aborted) return null;
+    if (signal?.aborted) return "cancelled";
     // Create a new tab in the scraper window
     const tab = await browser.tabs.create({
       url,
@@ -149,17 +149,24 @@ async function scrapeUrl(
     // Wait for the tab to load with timeout
     const loadComplete = await waitForTabLoad(tab.id!, opts.timeout, signal);
 
-    if (!loadComplete) {
-      if (!signal?.aborted) console.error(`Timeout waiting for ${url} to load`);
-      await browser.tabs.remove(tab.id!).catch(() => {});
-      return null;
+    if (loadComplete) {
+      // Additional delay for dynamic content
+      await sleep(opts.loadDelay, signal);
+    } else {
+      if (signal?.aborted) return "cancelled";
+      const stillOpen = await browser.tabs.get(tab.id!).then(
+        () => true,
+        () => false,
+      );
+      if (!stillOpen) return "the tab was closed before the page loaded";
+      // One slow script or image keeps a page "loading" forever, though its
+      // content is long on screen. Read what is there rather than drop the page.
+      console.warn(`${url} still loading after ${opts.timeout / 1000}s; reading what has loaded`);
     }
-
-    // Additional delay for dynamic content
-    await sleep(opts.loadDelay, signal);
 
     // Try to extract content with retries
     let result: ScraperResult | null = null;
+    let lastError = "";
     let retryCount = 0;
     let currentDelay = opts.retryDelay;
 
@@ -171,20 +178,13 @@ async function scrapeUrl(
           files: ["/content-scripts/scraper.js"],
         });
 
-        if (
-          injectionResults &&
-          injectionResults[0] &&
-          injectionResults[0].result
-        ) {
-          result = injectionResults[0].result as ScraperResult;
-
-          // Validate result has content
-          if (!result.html || result.html.trim() === "") {
-            result = null;
-            throw new Error("Empty content extracted");
-          }
-        }
+        const value = injectionResults?.[0]?.result as ScraperResult | undefined;
+        if (!value) throw new Error("the scraper script returned nothing");
+        // Validate result has content
+        if (!value.html || value.html.trim() === "") throw new Error("Empty content extracted");
+        result = value;
       } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
         console.warn(`Attempt ${retryCount + 1} failed for ${url}:`, error);
 
         if (retryCount < opts.maxRetries) {
@@ -206,15 +206,17 @@ async function scrapeUrl(
         title: result.title,
         html: cleanHtmlForLLM(result.html),
       };
-    } else {
-      console.error(
-        `Failed to extract content from ${url} after ${opts.maxRetries} retries`
-      );
-      return null;
     }
+    if (signal?.aborted) return "cancelled";
+    // A page that won't give up its content is an expected outcome, not an
+    // extension error: warn, and let the build log and the model see the reason.
+    const reason = `could not read the page after ${opts.maxRetries + 1} attempts: ${lastError}`;
+    console.warn(`${url}: ${reason}`);
+    return reason;
   } catch (error) {
-    console.error(`Failed to scrape ${url}:`, error);
-    return null;
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`Failed to scrape ${url}:`, error);
+    return reason;
   }
 }
 
@@ -248,8 +250,8 @@ export async function scrapeUrls(
       );
 
       for (const { url, page } of batchResults) {
-        if (page) pages.push(page);
-        else failed.push({ url, reason: "failed to load or extract within timeout" });
+        if (typeof page === "string") failed.push({ url, reason: page });
+        else pages.push(page);
       }
     }
   } finally {

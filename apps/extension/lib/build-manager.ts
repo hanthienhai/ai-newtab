@@ -2,6 +2,7 @@ import { runHomepageBuild, type RunPhase } from "@homepage/agent-core";
 import { rebuildIntervalMs, shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
 import { checkClaudeCode, nativeClaudeRunner } from "./claude-runner";
+import { closeOrphanScraperWindow } from "./scraper";
 import {
   INITIAL_BUILD_STATE,
   LOG_RETENTION,
@@ -42,6 +43,12 @@ export class BuildManager {
   private keepalive: ReturnType<typeof setInterval> | null = null;
   private lastSnapshotAt = 0;
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The tick in flight, if any. A browser launch wakes the worker with several
+   * ticks at once (worker load, onStartup, the missed alarm); without this they
+   * all read the same stale timestamps and each start a build.
+   */
+  private ticking: Promise<void> | null = null;
 
   // ---- port lifecycle ------------------------------------------------------
 
@@ -86,7 +93,14 @@ export class BuildManager {
    * closed with it, which stopped its `claude` process — so the next scheduled
    * or manual build starts fresh.
    */
-  async tick() {
+  tick(): Promise<void> {
+    this.ticking ??= this.runTick().finally(() => {
+      this.ticking = null;
+    });
+    return this.ticking;
+  }
+
+  private async runTick() {
     if (this.running) {
       // A run is live but the worker may have just woken; make sure the
       // self-keepalive is ticking so the active turn stays warm.
@@ -100,6 +114,8 @@ export class BuildManager {
       this.state = { ...snap, running: false, phase: "error", error: "The build was interrupted. Rebuild to try again." };
       await this.mirror(true);
     }
+    // No build is running, so any scraper window still open was left behind.
+    await closeOrphanScraperWindow();
 
     await this.maybeAutoRebuild();
   }
@@ -140,9 +156,18 @@ export class BuildManager {
       return; // single-flight: a second start just attaches.
     }
 
-    const { systemPrompt, model } = await loadSettings();
-
+    // Take the lock before the first await, or two starts in the same moment
+    // both pass the check above.
     this.running = true;
+    let settings: Awaited<ReturnType<typeof loadSettings>>;
+    try {
+      settings = await loadSettings();
+    } catch (error) {
+      this.running = false;
+      throw error;
+    }
+    const { systemPrompt, model } = settings;
+
     this.controller = new AbortController();
     this.state = { ...INITIAL_BUILD_STATE, running: true, phase: "setup" };
     this.broadcast({ kind: "snapshot", state: this.state });
@@ -174,6 +199,14 @@ export class BuildManager {
       await this.mirror(true);
       console.log("[BuildManager] build done", { bytes: result.code.length, source: result.source });
     } catch (error) {
+      if (this.controller?.signal.aborted) {
+        // The user cancelled: go back to idle, not to a "Build failed" banner.
+        this.state = { ...INITIAL_BUILD_STATE };
+        this.broadcast({ kind: "snapshot", state: this.state });
+        await this.mirror(true);
+        console.log("[BuildManager] build cancelled");
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.state = { ...this.state, running: false, phase: "error", error: message };
       this.broadcast({ kind: "error", message });

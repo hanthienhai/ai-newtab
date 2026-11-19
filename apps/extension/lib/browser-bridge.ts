@@ -8,5 +8,5 @@ import { scrapeUrls } from "./scraper";
  */
 export const browserBridge: BrowserBridge = {
   getHistory: ({ daysToAnalyze, maxResults }) => getHistorySites(daysToAnalyze, maxResults),
-  getPageHtml: ({ urls, loadDelayMs }) => scrapeUrls(urls, { loadDelay: loadDelayMs }),
+  getPageHtml: ({ urls, loadDelayMs, signal }) => scrapeUrls(urls, { loadDelay: loadDelayMs }, signal),
 };

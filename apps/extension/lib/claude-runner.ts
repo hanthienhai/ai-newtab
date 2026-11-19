@@ -24,6 +24,12 @@ function call<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
+    // An already-aborted signal never fires "abort" again, so without this a
+    // build cancelled between steps would still start the next claude turn.
+    if (signal?.aborted) {
+      reject(new Error("aborted"));
+      return;
+    }
     const id = 1;
     const port = browser.runtime.connectNative(NATIVE_HOST);
     let settled = false;

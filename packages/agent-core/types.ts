@@ -58,6 +58,8 @@ export interface BrowserBridge {
   getPageHtml(args: {
     urls: string[];
     loadDelayMs?: number;
+    /** Cancelling the build stops opening pages and closes what is open. */
+    signal?: AbortSignal;
   }): Promise<{ pages: ScrapedPage[]; failed: Array<{ url: string; reason: string }> }>;
 }
 

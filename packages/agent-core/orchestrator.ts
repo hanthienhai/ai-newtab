@@ -47,6 +47,10 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
     text: (t) => callbacks?.onText?.(t),
     log: (l) => callbacks?.onLog?.(l),
   };
+  /** Stop between steps once the build is cancelled, before any more work starts. */
+  const checkAborted = () => {
+    if (signal?.aborted) throw new Error("aborted");
+  };
 
   emit.phase("setup");
 
@@ -63,6 +67,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
   });
   emit.log(`history: ${digest.sites.length} of ${digest.totalSitesSeen} domains`);
   if (digest.sites.length === 0) throw new Error("No browsing history in the last two weeks to build from.");
+  checkAborted();
 
   // ---- turn 1: pick pages ----
   emit.phase("choosing");
@@ -82,7 +87,9 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
 
   // ---- open pages (in the browser) ----
   emit.phase("scraping", `${urls.length} pages`);
-  const { pages, failed } = await bridge.getPageHtml({ urls, loadDelayMs: DEFAULTS.loadDelayMs });
+  checkAborted();
+  const { pages, failed } = await bridge.getPageHtml({ urls, loadDelayMs: DEFAULTS.loadDelayMs, signal });
+  checkAborted();
   for (const f of failed) emit.log(`failed ${f.url}: ${f.reason}`);
   if (pages.length === 0) {
     throw new Error(`None of the chosen pages could be opened: ${failed.map((f) => f.url).join(", ")}`);
